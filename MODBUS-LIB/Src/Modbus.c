@@ -172,17 +172,7 @@ const unsigned char fctsupported[] =
     MB_FC_WRITE_MULTIPLE_COILS,
     MB_FC_WRITE_MULTIPLE_REGISTERS
 };
-
-
-/**
- * @brief
- * Initialization for a Master/Slave.
- * this function will check the configuration parameters
- * of the modbus handler
- *
- * @param modH   modbus handler
- */
-void ModbusInit(modbusHandler_t *modH) {
+void ModbusInit(modbusHandler_t *modH) {//this function will check the configuration parameters of the modbus handler
     if (numberHandlers >= MAX_M_HANDLERS) {
         while (1); // Error: No more Modbus handlers supported
     }
@@ -1092,25 +1082,15 @@ void StartTaskModbusMaster(void *argument)
  *
  * @ingroup register
  */
-void get_FC1(modbusHandler_t *modH)
-{
-    uint8_t u8byte, i;
-    u8byte = 3;
-     for (i=0; i< modH->u8Buffer[2]; i++) {
+void get_FC1(modbusHandler_t modH) {
+    uint8_t u8byte = 3; // Start reading from byte 3
+    uint16_t pReg = modH->u16regs; // Pointer to the register array
 
-        if(i%2)
-        {
-        	modH->u16regs[i/2]= word(modH->u8Buffer[i+u8byte], lowByte(modH->u16regs[i/2]));
-        }
-        else
-        {
-
-        	modH->u16regs[i/2]= word(highByte(modH->u16regs[i/2]), modH->u8Buffer[i+u8byte]);
-        }
-
-     }
+    for (uint8_t i = 0; i < modH->u8Buffer[2]; i += 2) { // Iterate through the data bytes (2 bytes per register)
+        pReg = (modH->u8Buffer[i + u8byte] << 8) | modH->u8Buffer[i + u8byte + 1]; // Combine the two bytes into a 16-bit register value
+        pReg++; // Move to the next register in the array
+    }
 }
-
 /**
  * This method processes functions 3 & 4 (for master)
  * This method puts the slave answer into master data buffer
