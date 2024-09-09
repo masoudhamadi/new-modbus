@@ -32,16 +32,13 @@
 #define bitSet(value, bit) ((value) |= (1UL << (bit)))
 #define bitClear(value, bit) ((value) &= ~(1UL << (bit)))
 #define bitWrite(value, bit, bitvalue) ((bitvalue) ? bitSet(value, bit) : bitClear(value, bit))
-
 #define lowByte(w) ((w) & 0xff)
 #define highByte(w) ((w) >> 8)
 
 
 modbusHandler_t *mHandlers[MAX_M_HANDLERS];
 
-
-///Queue Modbus telegrams for master
-const osMessageQueueAttr_t QueueTelegram_attributes = {
+const osMessageQueueAttr_t QueueTelegram_attributes = {//Queue Modbus telegrams for master
        .name = "QueueModbusTelegram"
 };
 
@@ -61,8 +58,7 @@ const osThreadAttr_t myTaskModbusA_attributesTCP = {
 
 
 //Task Modbus Master
-//osThreadId_t myTaskModbusAHandle;
-const osThreadAttr_t myTaskModbusB_attributes = {
+const osThreadAttr_t myTaskModbusB_attributes = {//osThreadId_t myTaskModbusAHandle;
     .name = "TaskModbusMaster",
     .priority = (osPriority_t) osPriorityNormal,
     .stack_size = 128 * 4
@@ -74,12 +70,7 @@ const osThreadAttr_t myTaskModbusB_attributesTCP = {
     .priority = (osPriority_t) osPriorityNormal,
     .stack_size = 256 * 4
 };
-
-
-
-
-//Semaphore to access the Modbus Data
-const osSemaphoreAttr_t ModBusSphr_attributes = {
+const osSemaphoreAttr_t ModBusSphr_attributes = {//Semaphore to access the Modbus Data
     .name = "ModBusSphr"
 };
 
@@ -119,9 +110,7 @@ static mb_errot_t TCPgetRxBuffer(modbusHandler_t * modH);
 
 
 /* Ring Buffer functions */
-// This function must be called only after disabling USART RX interrupt or inside of the RX interrupt
-void RingAdd(modbusRingBuffer_t *xRingBuffer, uint8_t u8Val)
-{
+void RingAdd(modbusRingBuffer_t *xRingBuffer, uint8_t u8Val) {// This function must be called only after disabling USART RX interrupt or inside of the RX interrupt
 
 	xRingBuffer->uxBuffer[xRingBuffer->u8end] = u8Val;
 	xRingBuffer->u8end = (xRingBuffer->u8end + 1) % MAX_BUFFER;
@@ -137,16 +126,10 @@ void RingAdd(modbusRingBuffer_t *xRingBuffer, uint8_t u8Val)
 	}
 
 }
-
-// This function must be called only after disabling USART RX interrupt
-uint8_t RingGetAllBytes(modbusRingBuffer_t *xRingBuffer, uint8_t *buffer)
-{
+uint8_t RingGetAllBytes(modbusRingBuffer_t *xRingBuffer, uint8_t *buffer){// This function must be called only after disabling USART RX interrupt
 	return RingGetNBytes(xRingBuffer, buffer, xRingBuffer->u8available);
 }
-
-// This function must be called only after disabling USART RX interrupt
-uint8_t RingGetNBytes(modbusRingBuffer_t *xRingBuffer, uint8_t *buffer, uint8_t uNumber)
-{
+uint8_t RingGetNBytes (modbusRingBuffer_t *xRingBuffer, uint8_t *buffer, uint8_t uNumber){// This function must be called only after disabling USART RX interrupt
 	uint8_t uCounter;
 	if(xRingBuffer->u8available == 0  || uNumber == 0 ) return 0;
 	if(uNumber > MAX_BUFFER) return 0;
@@ -163,13 +146,11 @@ uint8_t RingGetNBytes(modbusRingBuffer_t *xRingBuffer, uint8_t *buffer, uint8_t 
 	return uCounter;
 }
 
-uint8_t RingCountBytes(modbusRingBuffer_t *xRingBuffer)
-{
+uint8_t RingCountBytes(modbusRingBuffer_t *xRingBuffer){
 return xRingBuffer->u8available;
 }
 
-void RingClear(modbusRingBuffer_t *xRingBuffer)
-{
+void RingClear(modbusRingBuffer_t *xRingBuffer){
 xRingBuffer->u8start = 0;
 xRingBuffer->u8end = 0;
 xRingBuffer->u8available = 0;
@@ -201,231 +182,171 @@ const unsigned char fctsupported[] =
  *
  * @param modH   modbus handler
  */
-void ModbusInit(modbusHandler_t * modH)
-{
+void ModbusInit(modbusHandler_t *modH) {
+    if (numberHandlers >= MAX_M_HANDLERS) {
+        while (1); // Error: No more Modbus handlers supported
+    }
 
-  if (numberHandlers < MAX_M_HANDLERS)
-  {
+    // Initialize the ring buffer
+    RingClear(&modH->xBufferRX);
 
-	  //Initialize the ring buffer
+    // Create Modbus tasks based on the type
+    if (modH->uModbusType == MB_SLAVE) {
+        createModbusSlaveTask(modH);
+    } else if (modH->uModbusType == MB_MASTER) {
+        createModbusMasterTask(modH);
+    } else {
+        while (1); // Error: Modbus type not supported
+    }
 
-	  RingClear(&modH->xBufferRX);
+    // Check if the task was created successfully
+    if (modH->myTaskModbusAHandle == NULL) {
+        while (1); // Error: Creating Modbus task failed
+    }
 
-	  if(modH->uModbusType == MB_SLAVE)
-	  {
-		  //Create Modbus task slave
-#if ENABLE_TCP == 1
-		  if( modH->xTypeHW == TCP_HW)
-		  {
-			  modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributesTCP);
-		  }
-		  else{
-			  modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributes);
-		  }
-#else
-		  modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributes);
-#endif
+    // Create timers
+    createTimers(modH);
 
+    // Create semaphore
+    modH->ModBusSphrHandle = osSemaphoreNew(1, 1, &ModBusSphr_attributes);
+    if (modH->ModBusSphrHandle == NULL) {
+        while (1); // Error: Creating semaphore failed
+    }
 
-	  }
-	  else if (modH->uModbusType == MB_MASTER)
-	  {
-		  //Create Modbus task Master  and Queue for telegrams
-
-#if ENABLE_TCP == 1
-		  if( modH->xTypeHW == TCP_HW)
-		  {
-		     modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributesTCP);
-		  }
-		  else
-		  {
-		     modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributes);
-		  }
-#else
-		  modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributes);
-#endif
-
-
-
-		  modH->xTimerTimeout=xTimerCreate("xTimerTimeout",  // Just a text name, not used by the kernel.
-				  	  	modH->u16timeOut ,     		// The timer period in ticks.
-						pdFALSE,         // The timers will auto-reload themselves when they expire.
-						( void * )modH->xTimerTimeout,     // Assign each timer a unique id equal to its array index.
-						(TimerCallbackFunction_t) vTimerCallbackTimeout  // Each timer calls the same callback when it expires.
-                  	  	);
-
-		  if(modH->xTimerTimeout == NULL)
-		  {
-			  while(1); //error creating timer, check heap and stack size
-		  }
-
-
-		  modH->QueueTelegramHandle = osMessageQueueNew (MAX_TELEGRAMS, sizeof(modbus_t), &QueueTelegram_attributes);
-
-		  if(modH->QueueTelegramHandle == NULL)
-		  {
-			  while(1); //error creating queue for telegrams, check heap and stack size
-		  }
-
-	  }
-	  else
-	  {
-		  while(1); //Error Modbus type not supported choose a valid Type
-	  }
-
-	  if  (modH->myTaskModbusAHandle == NULL)
-	  {
-		  while(1); //Error creating Modbus task, check heap and stack size
-	  }
-
-
-	  modH->xTimerT35 = xTimerCreate("TimerT35",         // Just a text name, not used by the kernel.
-		  	  	  	  	  	  	  	T35 ,     // The timer period in ticks.
-                                    pdFALSE,         // The timers will auto-reload themselves when they expire.
-									( void * )modH->xTimerT35,     // Assign each timer a unique id equal to its array index.
-                                    (TimerCallbackFunction_t) vTimerCallbackT35     // Each timer calls the same callback when it expires.
-                                    );
-	  if (modH->xTimerT35 == NULL)
-	  {
-		  while(1); //Error creating the timer, check heap and stack size
-	  }
-
-
-	  modH->ModBusSphrHandle = osSemaphoreNew(1, 1, &ModBusSphr_attributes);
-
-	  if(modH->ModBusSphrHandle == NULL)
-	  {
-		  while(1); //Error creating the semaphore, check heap and stack size
-	  }
-
-	  mHandlers[numberHandlers] = modH;
-	  numberHandlers++;
-  }
-  else
-  {
-	  while(1); //error no more Modbus handlers supported
-  }
-
+    // Register the handler
+    mHandlers[numberHandlers++] = modH;
 }
 
-/**
- * @brief
- * Start object.
- *
- * Call this AFTER calling begin() on the serial port, typically within setup().
- *
- * (If you call this function, then you should NOT call any of
- * ModbusRtu's own begin() functions.)
- *
- * @ingroup setup
- */
-void ModbusStart(modbusHandler_t * modH)
-{
-
-	if(modH->xTypeHW != USART_HW && modH->xTypeHW != TCP_HW && modH->xTypeHW != USB_CDC_HW  && modH->xTypeHW != USART_HW_DMA )
-	{
-
-		while(1); //ERROR select the type of hardware
-	}
-
-	if (modH->xTypeHW == USART_HW_DMA && ENABLE_USART_DMA == 0  )
-	{
-		while(1); //ERROR To use USART_HW_DMA you need to enable it in the ModbusConfig.h file
-	}
-
-
-
-	if (modH->xTypeHW == USART_HW || modH->xTypeHW ==  USART_HW_DMA )
-	{
-
-	      if (modH->EN_Port != NULL )
-          {
-              // return RS485 transceiver to transmit mode
-          	HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_RESET);
-          }
-
-          if (modH->uModbusType == MB_SLAVE &&  modH->u16regs == NULL )
-          {
-          	while(1); //ERROR define the DATA pointer shared through Modbus
-          }
-
-          //check that port is initialized
-          while (HAL_UART_GetState(modH->port) != HAL_UART_STATE_READY)
-          {
-
-          }
-
-#if ENABLE_USART_DMA ==1
-          if( modH->xTypeHW == USART_HW_DMA )
-          {
-
-
-        	  if(HAL_UARTEx_ReceiveToIdle_DMA(modH->port, modH->xBufferRX.uxBuffer, MAX_BUFFER ) != HAL_OK)
-        	   {
-        	         while(1)
-        	         {
-        	                    	  //error in your initialization code
-        	         }
-        	   }
-        	  __HAL_DMA_DISABLE_IT(modH->port->hdmarx, DMA_IT_HT); // we don't need half-transfer interrupt
-
-          }
-          else{
-
-        	  // Receive data from serial port for Modbus using interrupt
-        	  if(HAL_UART_Receive_IT(modH->port, &modH->dataRX, 1) != HAL_OK)
-        	  {
-        	           while(1)
-        	           {
-        	                       	  //error in your initialization code
-        	           }
-        	  }
-
-          }
-
-
+void createModbusSlaveTask(modbusHandler_t *modH) {
+#if ENABLE_TCP == 1
+    if (modH->xTypeHW == TCP_HW) {
+        modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributesTCP);
+    } else {
+        modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributes);
+    }
 #else
-          // Receive data from serial port for Modbus using interrupt
-          if(HAL_UART_Receive_IT(modH->port, &modH->dataRX, 1) != HAL_OK)
-          {
-                while(1)
-                {
-                     	  //error in your initialization code
-                 }
-          }
+    modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusSlave, modH, &myTaskModbusA_attributes);
+#endif
+}
 
+void createModbusMasterTask(modbusHandler_t *modH) {
+#if ENABLE_TCP == 1
+    if (modH->xTypeHW == TCP_HW) {
+        modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributesTCP);
+    } else {
+        modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributes);
+    }
+#else
+    modH->myTaskModbusAHandle = osThreadNew(StartTaskModbusMaster, modH, &myTaskModbusB_attributes);
 #endif
 
-          if(modH->u8id !=0 && modH->uModbusType == MB_MASTER )
-          {
-        	  while(1)
-        	  {
-        	     	  //error Master ID must be zero
-        	  }
+    // Create message queue for telegrams
+    modH->QueueTelegramHandle = osMessageQueueNew(MAX_TELEGRAMS, sizeof(modbus_t), &QueueTelegram_attributes);
+    if (modH->QueueTelegramHandle == NULL) {
+        while (1); // Error: Creating queue for telegrams failed
+    }
+}
 
-          }
+void createTimers(modbusHandler_t *modH) {
+    modH->xTimerTimeout = xTimerCreate("xTimerTimeout", modH->u16timeOut, pdFALSE,
+                                        (void *)modH->xTimerTimeout, vTimerCallbackTimeout);
+    if (modH->xTimerTimeout == NULL) {
+        while (1); // Error: Creating timeout timer failed
+    }
 
-          if(modH->u8id ==0 && modH->uModbusType == MB_SLAVE )
-          {
-             	  while(1)
-               	  {
-                  	     	  //error Master ID must be zero
-               	  }
+    modH->xTimerT35 = xTimerCreate("TimerT35", T35, pdFALSE,
+                                    (void *)modH->xTimerT35, vTimerCallbackT35);
+    if (modH->xTimerT35 == NULL) {
+        while (1); // Error: Creating T35 timer failed
+    }
+}
+void ModbusStart(modbusHandler_t *modH) {
+    // Validate hardware type
+    if (!isValidHardwareType(modH->xTypeHW)) {
+        while (1); // ERROR: Invalid hardware type selected
+    }
 
-           }
+    // Check for USART_DMA requirement
+    if (modH->xTypeHW == USART_HW_DMA && ENABLE_USART_DMA == 0) {
+        while (1); // ERROR: USART_HW_DMA requires enabling in ModbusConfig.h
+    }
 
-	}
+    // Handle USART and USART_DMA initialization
+    if (modH->xTypeHW == USART_HW || modH->xTypeHW == USART_HW_DMA) {
+        configureTransceiver(modH);
+
+        if (modH->uModbusType == MB_SLAVE && modH->u16regs == NULL) {
+            while (1); // ERROR: Define the DATA pointer shared through Modbus
+        }
+
+        // Wait for UART port to be ready
+        waitForUARTReady(modH->port);
+
+#if ENABLE_USART_DMA == 1
+        if (modH->xTypeHW == USART_HW_DMA) {
+            initializeUSARTDMA(modH);
+        } else {
+            initializeUSARTInterrupt(modH);
+        }
+#else
+        initializeUSARTInterrupt(modH);
+#endif
+
+        validateMasterSlaveID(modH);
+    }
 
 #if ENABLE_TCP == 1
-
-
-
+    // TCP-specific initialization can go here
 #endif
 
+    // Reset counters
+    resetModbusCounters(modH);
+}
 
+// Helper functions
+
+bool isValidHardwareType(int type) {
+    return (type == USART_HW || type == TCP_HW || type == USB_CDC_HW || type == USART_HW_DMA);
+}
+
+void configureTransceiver(modbusHandler_t *modH) {
+    if (modH->EN_Port != NULL) {
+        HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_RESET); // Set RS485 to transmit mode
+    }
+}
+
+void waitForUARTReady(UART_HandleTypeDef *port) {
+    while (HAL_UART_GetState(port) != HAL_UART_STATE_READY) {
+        // Optionally add a timeout mechanism here
+    }
+}
+
+void initializeUSARTDMA(modbusHandler_t *modH) {
+    if (HAL_UARTEx_ReceiveToIdle_DMA(modH->port, modH->xBufferRX.uxBuffer, MAX_BUFFER) != HAL_OK) {
+        while (1); // ERROR: Initialization code failed
+    }
+    __HAL_DMA_DISABLE_IT(modH->port->hdmarx, DMA_IT_HT); // Disable half-transfer interrupt
+}
+
+void initializeUSARTInterrupt(modbusHandler_t *modH) {
+    if (HAL_UART_Receive_IT(modH->port, &modH->dataRX, 1) != HAL_OK) {
+        while (1); // ERROR: Initialization code failed
+    }
+}
+
+void validateMasterSlaveID(modbusHandler_t *modH) {
+    if (modH->u8id != 0 && modH->uModbusType == MB_MASTER) {
+        while (1); // ERROR: Master ID must be zero
+    }
+
+    if (modH->u8id == 0 && modH->uModbusType == MB_SLAVE) {
+        while (1); // ERROR: Slave ID must be non-zero
+    }
+}
+
+void resetModbusCounters(modbusHandler_t *modH) {
     modH->u8lastRec = modH->u8BufferSize = 0;
     modH->u16InCnt = modH->u16OutCnt = modH->u16errCnt = 0;
-
 }
 
 #if ENABLE_USB_CDC == 1
@@ -628,142 +549,123 @@ void  TCPinitserver(modbusHandler_t *modH)
 
 
 
-void StartTaskModbusSlave(void *argument)
-{
+void StartTaskModbusSlave(void *argument) {
+    modbusHandler_t *modH = (modbusHandler_t *)argument;
 
-  modbusHandler_t *modH =  (modbusHandler_t *)argument;
-  //uint32_t notification;
-
-#if ENABLE_TCP ==1
-  if( modH->xTypeHW == TCP_HW )
-  {
-	  TCPinitserver(modH); // start the Modbus server slave
-  }
-#endif
-
-  for(;;)
-  {
-
-	modH->i8lastError = 0;
-
-
-#if ENABLE_USB_CDC ==1
-
-	  if(modH-> xTypeHW == USB_CDC_HW)
-	  {
-		      ulTaskNotifyTake(pdTRUE, portMAX_DELAY); /* Block indefinitely until a Modbus Frame arrives */
-			  if (modH->u8BufferSize == ERR_BUFF_OVERFLOW) // is this necessary?
-			  {
-			     modH->i8lastError = ERR_BUFF_OVERFLOW;
-			  	 modH->u16errCnt++;
-			  	 continue;
-			  }
-	  }
-#endif
-
-#if ENABLE_TCP ==1
-	  if(modH-> xTypeHW == TCP_HW)
-	  {
-
-		  if(TCPwaitConnData(modH) == false) // wait for connection and receive data
-		  {
-			continue; // TCP package was not validated
-		  }
-
-	  }
-#endif
-
-
-   if(modH->xTypeHW == USART_HW || modH->xTypeHW == USART_HW_DMA)
-   {
-
-	  ulTaskNotifyTake(pdTRUE, portMAX_DELAY); /* Block until a Modbus Frame arrives */
-
-	  if (getRxBuffer(modH) == ERR_BUFF_OVERFLOW)
-	  {
-	      modH->i8lastError = ERR_BUFF_OVERFLOW;
-	   	  modH->u16errCnt++;
-		  continue;
-	  }
-
-   }
-
-   if (modH->u8BufferSize < 7)
-   {
-      //The size of the frame is invalid
-      modH->i8lastError = ERR_BAD_SIZE;
-      modH->u16errCnt++;
-
-	  continue;
+#if ENABLE_TCP == 1
+    if (modH->xTypeHW == TCP_HW) {
+        TCPinitserver(modH); // Start the Modbus server slave
     }
-
-
-   // check slave id
-    if ( modH->u8Buffer[ID] !=  modH->u8id)
-	{
-
-#if ENABLE_TCP == 0
-    	continue; // continue this is not for us
-#else
-    	if(modH->xTypeHW != TCP_HW)
-    	{
-    		continue; //for Modbus TCP this is not validated, user should modify accordingly if needed
-    	}
 #endif
-	 }
 
-	  // validate message: CRC, FCT, address and size
-    uint8_t u8exception = validateRequest(modH);
-	if (u8exception > 0)
-	{
-	    if (u8exception != ERR_TIME_OUT)
-		{
-		    buildException( u8exception, modH);
-			sendTxBuffer(modH);
-		}
-		modH->i8lastError = u8exception;
-		//return u8exception
+    for (;;) {
+        modH->i8lastError = 0;
 
-		continue;
-	 }
+#if ENABLE_USB_CDC == 1
+        if (modH->xTypeHW == USB_CDC_HW) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // Block until a Modbus Frame arrives
+            if (modH->u8BufferSize == ERR_BUFF_OVERFLOW) {
+                handleBufferOverflow(modH);
+                continue;
+            }
+        }
+#endif
 
-	 modH->i8lastError = 0;
-	xSemaphoreTake(modH->ModBusSphrHandle , portMAX_DELAY); //before processing the message get the semaphore
+#if ENABLE_TCP == 1
+        if (modH->xTypeHW == TCP_HW) {
+            if (!TCPwaitConnData(modH)) { // Wait for connection and receive data
+                continue; // TCP package was not validated
+            }
+        }
+#endif
 
-	 // process message
-	 switch(modH->u8Buffer[ FUNC ] )
-	 {
-			case MB_FC_READ_COILS:
-			case MB_FC_READ_DISCRETE_INPUT:
-				modH->i8state = process_FC1(modH);
-				break;
-			case MB_FC_READ_INPUT_REGISTER:
-			case MB_FC_READ_REGISTERS :
-				modH->i8state = process_FC3(modH);
-				break;
-			case MB_FC_WRITE_COIL:
-				modH->i8state = process_FC5(modH);
-				break;
-			case MB_FC_WRITE_REGISTER :
-				modH->i8state = process_FC6(modH);
-				break;
-			case MB_FC_WRITE_MULTIPLE_COILS:
-				modH->i8state = process_FC15(modH);
-				break;
-			case MB_FC_WRITE_MULTIPLE_REGISTERS :
-				modH->i8state = process_FC16(modH);
-				break;
-			default:
-				break;
-	 }
+        if (isUsartHardware(modH)) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // Block until a Modbus Frame arrives
+            if (getRxBuffer(modH) == ERR_BUFF_OVERFLOW) {
+                handleBufferOverflow(modH);
+                continue;
+            }
+        }
 
+        if (modH->u8BufferSize < 7) {
+            handleInvalidFrameSize(modH);
+            continue;
+        }
 
-	 xSemaphoreGive(modH->ModBusSphrHandle); //Release the semaphore
+        if (!isValidSlaveId(modH)) {
+            continue; // This request is not for us
+        }
 
-	 continue;
+        uint8_t u8exception = validateRequest(modH);
+        if (handleValidationException(u8exception, modH)) {
+            continue; // Handle exception and continue
+        }
 
-   }
+        xSemaphoreTake(modH->ModBusSphrHandle, portMAX_DELAY); // Acquire semaphore
 
+        // Process message based on function code
+        modH->i8state = processFunctionCode(modH);
+
+        xSemaphoreGive(modH->ModBusSphrHandle); // Release semaphore
+    }
+}
+
+// Helper functions
+
+bool isUsartHardware(modbusHandler_t *modH) {
+    return (modH->xTypeHW == USART_HW || modH->xTypeHW == USART_HW_DMA);
+}
+
+void handleBufferOverflow(modbusHandler_t *modH) {
+    modH->i8lastError = ERR_BUFF_OVERFLOW;
+    modH->u16errCnt++;
+}
+
+void handleInvalidFrameSize(modbusHandler_t *modH) {
+    modH->i8lastError = ERR_BAD_SIZE;
+    modH->u16errCnt++;
+}
+
+bool isValidSlaveId(modbusHandler_t *modH) {
+#if ENABLE_TCP == 0
+    return (modH->u8Buffer[ID] == modH->u8id);
+#else
+    return (modH->xTypeHW != TCP_HW || modH->u8Buffer[ID] == modH->u8id);
+#endif
+}
+
+bool handleValidationException(uint8_t u8exception, modbusHandler_t *modH) {
+    if (u8exception > 0) {
+        if (u8exception != ERR_TIME_OUT) {
+            buildException(u8exception, modH);
+            sendTxBuffer(modH);
+        }
+        modH->i8lastError = u8exception;
+        return true; // Exception handled
+    }
+    modH->i8lastError = 0;
+    return false; // No exception
+}
+
+int32_t processFunctionCode(modbusHandler_t *modH) {
+    switch (modH->u8Buffer[FUNC]) {
+        case MB_FC_READ_COILS:
+        case MB_FC_READ_DISCRETE_INPUT:
+            return process_FC1(modH);
+        case MB_FC_READ_INPUT_REGISTER:
+        case MB_FC_READ_REGISTERS:
+            return process_FC3(modH);
+        case MB_FC_WRITE_COIL:
+            return process_FC5(modH);
+        case MB_FC_WRITE_REGISTER:
+            return process_FC6(modH);
+        case MB_FC_WRITE_MULTIPLE_COILS:
+            return process_FC15(modH);
+        case MB_FC_WRITE_MULTIPLE_REGISTERS:
+            return process_FC16(modH);
+        default:
+            return -1; // Invalid function code
+    }
 }
 
 
@@ -1215,8 +1117,7 @@ void get_FC1(modbusHandler_t *modH)
  *
  * @ingroup register
  */
-void get_FC3(modbusHandler_t *modH)
-{
+void get_FC3(modbusHandler_t *modH){
     uint8_t u8byte, i;
     u8byte = 3;
 
@@ -1226,73 +1127,43 @@ void get_FC3(modbusHandler_t *modH)
         u8byte += 2;
     }
 }
+uint8_t validateAnswer(modbusHandler_t modH) {
+    // Check message CRC vs calculated CRC
+    #if ENABLE_TCP == 1
+        if (modH->xTypeHW != TCP_HW) { 
+    #endif
+            uint16_t u16MsgCRC = (modH->u8Buffer[modH->u8BufferSize - 2] << 8) | modH->u8Buffer[modH->u8BufferSize - 1]; // Combine CRC Low & High bytes
+            if (calcCRC(modH->u8Buffer, modH->u8BufferSize - 2) != u16MsgCRC) { // Compare calculated CRC with message CRC
+                modH->u16errCnt++;
+                return ERR_BAD_CRC;
+            }
+    #if ENABLE_TCP == 1
+        }
+    #endif
 
-
-
-/**
- * @brief
- * This method validates master incoming messages
- *
- * @return 0 if OK, EXCEPTION if anything fails
- * @ingroup buffer
- */
-uint8_t validateAnswer(modbusHandler_t *modH)
-{
-    // check message crc vs calculated crc
-
-#if ENABLE_TCP ==1
-	if(modH->xTypeHW != TCP_HW)
-	{
-#endif
-	uint16_t u16MsgCRC =
-        ((modH->u8Buffer[modH->u8BufferSize - 2] << 8)
-         | modH->u8Buffer[modH->u8BufferSize - 1]); // combine the crc Low & High bytes
-    if ( calcCRC(modH->u8Buffer,  modH->u8BufferSize-2) != u16MsgCRC )
-    {
-    	modH->u16errCnt ++;
-        return ERR_BAD_CRC;
-    }
-#if ENABLE_TCP ==1
-	}
-#endif
-
-
-    // check exception
-    if ((modH->u8Buffer[ FUNC ] & 0x80) != 0)
-    {
-    	modH->u16errCnt ++;
+    // Check Modbus Exception
+    if ((modH->u8Buffer[FUNC] & 0x80) != 0) { // Check bit 7 of Function Code
+        modH->u16errCnt++;
         return ERR_EXCEPTION;
     }
 
-    // check fct code
+    // Check Function Code
     bool isSupported = false;
-    for (uint8_t i = 0; i< sizeof( fctsupported ); i++)
-    {
-        if (fctsupported[i] == modH->u8Buffer[FUNC])
-        {
-            isSupported = 1;
+    for (uint8_t i = 0; i < sizeof(fctsupported); i++) {
+        if (fctsupported[i] == modH->u8Buffer[FUNC]) { // Check Function Code against supported Function Codes
+            isSupported = true;
             break;
         }
     }
-    if (!isSupported)
-    {
-    	modH->u16errCnt ++;
+
+    if (!isSupported) {
+        modH->u16errCnt++;
         return EXC_FUNC_CODE;
     }
 
     return 0; // OK, no exception code thrown
 }
-
-
-/**
- * @brief
- * This method moves Serial buffer data to the Modbus u8Buffer.
- *
- * @return buffer size if OK, ERR_BUFF_OVERFLOW if u8BufferSize >= MAX_BUFFER
- * @ingroup buffer
- */
-int16_t getRxBuffer(modbusHandler_t *modH)
-{
+int16_t getRxBuffer(modbusHandler_t *modH){//This method moves Serial buffer data to the Modbus u8Buffer.
 
     int16_t i16result;
 
@@ -1320,20 +1191,7 @@ int16_t getRxBuffer(modbusHandler_t *modH)
 
     return i16result;
 }
-
-
-
-
-
-/**
- * @brief
- * This method validates slave incoming messages
- *
- * @return 0 if OK, EXCEPTION if anything fails
- * @ingroup modH Modbus handler
- */
-uint8_t validateRequest(modbusHandler_t *modH)
-{
+uint8_t validateRequest(modbusHandler_t *modH){//This method validates slave incoming messages
 	// check message crc vs calculated crc
 
 #if ENABLE_TCP ==1
@@ -1428,68 +1286,31 @@ uint8_t validateRequest(modbusHandler_t *modH)
 	    return 0; // OK, no exception code thrown
 
 }
-
-/**
- * @brief
- * This method creates a word from 2 bytes
- *
- * @return uint16_t (word)
- * @ingroup H  Most significant byte
- * @ingroup L  Less significant byte
- */
-uint16_t word(uint8_t H, uint8_t L)
-{
+uint16_t word(uint8_t H, uint8_t L){//This method creates a word from 2 bytes
 	bytesFields W;
 	W.u8[0] = L;
 	W.u8[1] = H;
 
 	return W.u16[0];
 }
+uint16_t calcCRC(uint8_t Buffer, uint8_t u8length) {
+    uint16_t crc = 0xFFFF; // Initial CRC value
 
+    for (uint8_t i = 0; i < u8length; i++) { 
+        crc ^= Buffer[i]; // XOR with current data byte
 
-/**
- * @brief
- * This method calculates CRC
- *
- * @return uint16_t calculated CRC value for the message
- * @ingroup Buffer
- * @ingroup u8length
- */
-uint16_t calcCRC(uint8_t *Buffer, uint8_t u8length)
-{
-    unsigned int temp, temp2, flag;
-    temp = 0xFFFF;
-    for (unsigned char i = 0; i < u8length; i++)
-    {
-        temp = temp ^ Buffer[i];
-        for (unsigned char j = 1; j <= 8; j++)
-        {
-            flag = temp & 0x0001;
-            temp >>=1;
-            if (flag)
-                temp ^= 0xA001;
+        for (uint8_t j = 0; j < 8; j++) { // For each bit in the data byte
+            if (crc & 0x0001) { // If the least significant bit of CRC is 1
+                crc >>= 1; // Right shift CRC
+                crc ^= 0xA001; // XOR with CRC-16 constant
+            } else {
+                crc >>= 1; // Right shift CRC
+            }
         }
     }
-    // Reverse byte order.
-    temp2 = temp >> 8;
-    temp = (temp << 8) | temp2;
-    temp &= 0xFFFF;
-    // the returned value is already swapped
-    // crcLo byte is first & crcHi byte is last
-    return temp;
-
+    return crc; // Return the calculated CRC value
 }
-
-
-/**
- * @brief
- * This method builds an exception message
- *
- * @ingroup u8exception exception number
- * @ingroup modH modbus handler
- */
-void buildException( uint8_t u8exception, modbusHandler_t *modH )
-{
+void buildException( uint8_t u8exception, modbusHandler_t *modH ){
     uint8_t u8func = modH->u8Buffer[ FUNC ];  // get the original FUNC code
 
     modH->u8Buffer[ ID ]      = modH->u8id;
@@ -1502,409 +1323,256 @@ void buildException( uint8_t u8exception, modbusHandler_t *modH )
 #if ENABLE_USB_CDC == 1
 extern uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 #endif
-
-/**
- * @brief
- * This method transmits u8Buffer to Serial line.
- * Only if u8txenpin != 0, there is a flow handling in order to keep
- * the RS485 transceiver in output state as long as the message is being sent.
- * This is done with TC bit.
- * The CRC is appended to the buffer before starting to send it.
- *
- * @return nothing
- * @ingroup modH Modbus handler
- */
-static void sendTxBuffer(modbusHandler_t *modH)
-{
-    // append CRC to message
-
-#if  ENABLE_TCP == 1
-if(modH->xTypeHW != TCP_HW)
-	 {
-#endif
-
-	uint16_t u16crc = calcCRC(modH->u8Buffer, modH->u8BufferSize);
-    modH->u8Buffer[ modH->u8BufferSize ] = u16crc >> 8;
-    modH->u8BufferSize++;
-    modH->u8Buffer[ modH->u8BufferSize ] = u16crc & 0x00ff;
-    modH->u8BufferSize++;
-
+static void sendTxBuffer(modbusHandler_t *modH) {//send the handeler buffer on selected port
+    // Append CRC to message
 #if ENABLE_TCP == 1
-	 }
+    if (modH->xTypeHW != TCP_HW) {
 #endif
-
-
-#if ENABLE_USB_CDC == 1 || ENABLE_TCP == 1
-    if(modH->xTypeHW == USART_HW || modH->xTypeHW == USART_HW_DMA )
-    {
-#endif
-
-    	if (modH->EN_Port != NULL)
-        {
-    		//enable transmitter, disable receiver to avoid echo on RS485 transceivers
-    		HAL_HalfDuplex_EnableTransmitter(modH->port);
-    		HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_SET);
-        }
-
-#if ENABLE_USART_DMA ==1
-    	if(modH->xTypeHW == USART_HW)
-    	{
-#endif
-    		// transfer buffer to serial line IT
-    		HAL_UART_Transmit_IT(modH->port, modH->u8Buffer,  modH->u8BufferSize);
-
-#if ENABLE_USART_DMA ==1
-    	}
-        else
-        {
-        	//transfer buffer to serial line DMA
-        	HAL_UART_Transmit_DMA(modH->port, modH->u8Buffer, modH->u8BufferSize);
-
-        }
-#endif
-
-        ulTaskNotifyTake(pdTRUE, 250); //wait notification from TXE interrupt
-/*
-* If you are porting the library to a different MCU check the 
-* USART datasheet and add the corresponding family in the following
-* preprocessor conditions
-*/
-#if defined(STM32H7)  || defined(STM32F3) || defined(STM32L4)  
-          while((modH->port->Instance->ISR & USART_ISR_TC) ==0 )
-#else
-          // F429, F103, L152 ...
-	  while((modH->port->Instance->SR & USART_SR_TC) ==0 )
-#endif
-         {
- 	        //block the task until the the last byte is send out of the shifting buffer in USART
-         }
-
-
-         if (modH->EN_Port != NULL)
-         {
-
-             //return RS485 transceiver to receive mode
-        	 HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_RESET);
-        	 //enable receiver, disable transmitter
-        	 HAL_HalfDuplex_EnableReceiver(modH->port);
-
-         }
-
-         // set timeout for master query
-         if(modH->uModbusType == MB_MASTER )
-         {
-        	 xTimerReset(modH->xTimerTimeout,0);
-         }
-#if ENABLE_USB_CDC == 1 || ENABLE_TCP == 1
+        uint16_t u16crc = calcCRC(modH->u8Buffer, modH->u8BufferSize);
+        modH->u8Buffer[modH->u8BufferSize++] = u16crc >> 8;
+        modH->u8Buffer[modH->u8BufferSize++] = u16crc & 0x00FF;
+#if ENABLE_TCP == 1
     }
+#endif
+
+#if ENABLE_USB_CDC == 1 || ENABLE_TCP == 1
+    if (modH->xTypeHW == USART_HW || modH->xTypeHW == USART_HW_DMA) {
+#endif
+        if (modH->EN_Port != NULL) {
+            // Enable transmitter, disable receiver to avoid echo on RS485 transceivers
+            HAL_HalfDuplex_EnableTransmitter(modH->port);
+            HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_SET);
+        }
+
+#if ENABLE_USART_DMA == 1
+        if (modH->xTypeHW == USART_HW) {
+            // Transfer buffer to serial line IT
+            HAL_UART_Transmit_IT(modH->port, modH->u8Buffer, modH->u8BufferSize);
+        } else {
+            // Transfer buffer to serial line DMA
+            HAL_UART_Transmit_DMA(modH->port, modH->u8Buffer, modH->u8BufferSize);
+        }
+#else
+        // Transfer buffer to serial line IT by default
+        HAL_UART_Transmit_IT(modH->port, modH->u8Buffer, modH->u8BufferSize);
+#endif
+
+        ulTaskNotifyTake(pdTRUE, 250); // Wait notification from TXE interrupt
+
+        // Block until the last byte is sent out of the shifting buffer in USART
+#if defined(STM32H7) || defined(STM32F3) || defined(STM32L4)
+        while ((modH->port->Instance->ISR & USART_ISR_TC) == 0);
+#else
+        while ((modH->port->Instance->SR & USART_SR_TC) == 0);
+#endif
+
+        if (modH->EN_Port != NULL) {
+            // Return RS485 transceiver to receive mode
+            HAL_GPIO_WritePin(modH->EN_Port, modH->EN_Pin, GPIO_PIN_RESET);
+            HAL_HalfDuplex_EnableReceiver(modH->port);
+        }
+
+        // Set timeout for master query
+        if (modH->uModbusType == MB_MASTER) {
+            xTimerReset(modH->xTimerTimeout, 0);
+        }
 
 #if ENABLE_USB_CDC == 1
-    else if(modH->xTypeHW == USB_CDC_HW)
-	{
-    	CDC_Transmit_FS(modH->u8Buffer,  modH->u8BufferSize);
-    	// set timeout for master query
-    	if(modH->uModbusType == MB_MASTER )
-    	{
-    	   	xTimerReset(modH->xTimerTimeout,0);
-    	}
+    } else if (modH->xTypeHW == USB_CDC_HW) {
+        CDC_Transmit_FS(modH->u8Buffer, modH->u8BufferSize);
 
-	}
+        // Set timeout for master query
+        if (modH->uModbusType == MB_MASTER) {
+            xTimerReset(modH->xTimerTimeout, 0);
+        }
+    }
 #endif
 
 #if ENABLE_TCP == 1
+    else if (modH->xTypeHW == TCP_HW) {
+        uint8_t u8MBAPheader[6];
+        struct netvector xNetVectors[2];
+        size_t uBytesWritten;
 
-    else if(modH->xTypeHW == TCP_HW)
-    	{
+        u8MBAPheader[0] = highByte(modH->u16TransactionID);
+        u8MBAPheader[1] = lowByte(modH->u16TransactionID);
+        u8MBAPheader[2] = u8MBAPheader[3] = 0; // Protocol ID
+        u8MBAPheader[4] = 0; // High byte data length always 0
+        u8MBAPheader[5] = modH->u8BufferSize; // Data length
 
-    	  struct netvector  xNetVectors[2];
-    	  uint8_t u8MBAPheader[6];
-    	  size_t uBytesWritten;
+        xNetVectors[0].len = sizeof(u8MBAPheader);
+        xNetVectors[0].ptr = u8MBAPheader;
 
+        xNetVectors[1].len = modH->u8BufferSize;
+        xNetVectors[1].ptr = modH->u8Buffer;
 
-    	  u8MBAPheader[0] = highByte(modH->u16TransactionID); // this might need improvement the transaction ID could be validated
-    	  u8MBAPheader[1] = lowByte(modH->u16TransactionID);
-    	  u8MBAPheader[2] = 0; //protocol ID
-    	  u8MBAPheader[3] = 0; //protocol ID
-    	  u8MBAPheader[4] = 0; //highbyte data length always 0
-    	  u8MBAPheader[5] = modH->u8BufferSize; //highbyte data length
+        netconn_set_sendtimeout(modH->newconns[modH->newconnIndex].conn, modH->u16timeOut);
 
-    	  xNetVectors[0].len = 6;
-    	  xNetVectors[0].ptr = (void *) u8MBAPheader;
+        err_enum_t err = netconn_write_vectors_partly(modH->newconns[modH->newconnIndex].conn, xNetVectors, 2, NETCONN_COPY, &uBytesWritten);
+        
+        if (err != ERR_OK) {
+            ModbusCloseConnNull(modH);
+        }
 
-    	  xNetVectors[1].len = modH->u8BufferSize;
-    	  xNetVectors[1].ptr = (void *) modH->u8Buffer;
-
-
-    	  netconn_set_sendtimeout(modH->newconns[modH->newconnIndex].conn, modH->u16timeOut);
-    	  err_enum_t err;
-
-    	  err = netconn_write_vectors_partly(modH->newconns[modH->newconnIndex].conn, xNetVectors, 2, NETCONN_COPY, &uBytesWritten);
-    	  if (err != ERR_OK )
-    	  {
-
-    		 // ModbusCloseConn(modH->newconns[modH->newconnIndex].conn);
-    		 ModbusCloseConnNull(modH);
-
-    	  }
-
-
-    	  if(modH->uModbusType == MB_MASTER )
-    	  {
-    	    xTimerReset(modH->xTimerTimeout,0);
-    	  }
-    	}
-
+        if (modH->uModbusType == MB_MASTER) {
+            xTimerReset(modH->xTimerTimeout, 0);
+        }
+    }
 #endif
 
-#endif
-
-     modH->u8BufferSize = 0;
-     // increase message counter
-     modH->u16OutCnt++;
-
-
+    modH->u8BufferSize = 0; // Reset buffer size
+    modH->u16OutCnt++;      // Increase message counter
 }
 
 
-/**
- * @brief
- * This method processes functions 1 & 2
- * This method reads a bit array and transfers it to the master
- *
- * @return u8BufferSize Response to master length
- * @ingroup discrete
- */
-int8_t process_FC1(modbusHandler_t *modH )
-{
-    uint16_t u16currentRegister;
-    uint8_t u8currentBit, u8bytesno, u8bitsno;
-    uint8_t u8CopyBufferSize;
-    uint16_t u16currentCoil, u16coil;
+int8_t process_FC1(modbusHandler_t *modH) {// Function to process function code 1 (Read Coils)
+    uint16_t startCoil = word(modH->u8Buffer[ADD_HI], modH->u8Buffer[ADD_LO]);
+    uint16_t coilCount = word(modH->u8Buffer[NB_HI], modH->u8Buffer[NB_LO]);
 
-    // get the first and last coil from the message
-    uint16_t u16StartCoil = word( modH->u8Buffer[ ADD_HI ], modH->u8Buffer[ ADD_LO ] );
-    uint16_t u16Coilno = word( modH->u8Buffer[ NB_HI ], modH->u8Buffer[ NB_LO ] );
+    // Calculate the number of bytes needed in the response
+    uint8_t byteCount = (coilCount + 7) / 8; // Ceiling division
+    modH->u8Buffer[ADD_HI] = byteCount;
+    modH->u8BufferSize = ADD_LO;
 
-    // put the number of bytes in the outcoming message
-    u8bytesno = (uint8_t) (u16Coilno / 8);
-    if (u16Coilno % 8 != 0) u8bytesno ++;
-    modH->u8Buffer[ ADD_HI ]  = u8bytesno;
-    modH->u8BufferSize         = ADD_LO;
-    modH->u8Buffer[modH->u8BufferSize + u8bytesno - 1 ] = 0;
+    // Initialize the output buffer
+    for (uint8_t i = 0; i < byteCount; i++) {
+        modH->u8Buffer[modH->u8BufferSize + i] = 0; // Clear the byte
+    }
 
-    // read each coil from the register map and put its value inside the outcoming message
-    u8bitsno = 0;
+    // Read coils and populate the response buffer
+    for (uint16_t currentCoil = 0; currentCoil < coilCount; currentCoil++) {
+        uint16_t coilIndex = startCoil + currentCoil;
+        uint16_t registerIndex = coilIndex / 16;
+        uint8_t bitIndex = coilIndex % 16;
 
-    for (u16currentCoil = 0; u16currentCoil < u16Coilno; u16currentCoil++)
-    {
-        u16coil = u16StartCoil + u16currentCoil;
-        u16currentRegister =  (u16coil / 16);
-        u8currentBit = (uint8_t) (u16coil % 16);
-
-        bitWrite(
-        	modH->u8Buffer[ modH->u8BufferSize ],
-            u8bitsno,
-		    bitRead( modH->u16regs[ u16currentRegister ], u8currentBit ) );
-        u8bitsno ++;
-
-        if (u8bitsno > 7)
-        {
-            u8bitsno = 0;
-            modH->u8BufferSize++;
+        // Set the appropriate bit in the response buffer
+        if (bitRead(modH->u16regs[registerIndex], bitIndex)) {
+            modH->u8Buffer[modH->u8BufferSize + (currentCoil / 8)] |= (1 << (currentCoil % 8));
         }
     }
 
-    // send outcoming message
-    if (u16Coilno % 8 != 0) modH->u8BufferSize ++;
-    u8CopyBufferSize = modH->u8BufferSize +2;
+    // Update buffer size
+    modH->u8BufferSize += byteCount;
+
+    // Send the outgoing message
     sendTxBuffer(modH);
-    return u8CopyBufferSize;
+    return modH->u8BufferSize + 2; // Return total size including Modbus header
 }
+int8_t process_FC3(modbusHandler_t *modH) {// Function to process function code 3 (Read Holding Registers)
+    uint16_t startAddress = word(modH->u8Buffer[ADD_HI], modH->u8Buffer[ADD_LO]);
+    uint16_t registerCount = word(modH->u8Buffer[NB_HI], modH->u8Buffer[NB_LO]);
 
+    // Set the byte count in the response
+    modH->u8Buffer[2] = registerCount * 2; // Each register is 2 bytes
+    modH->u8BufferSize = 3; // Start with the Modbus header size
 
-/**
- * @brief
- * This method processes functions 3 & 4
- * This method reads a word array and transfers it to the master
- *
- * @return u8BufferSize Response to master length
- * @ingroup register
- */
-int8_t process_FC3(modbusHandler_t *modH)
-{
-
-    uint16_t u16StartAdd = word( modH->u8Buffer[ ADD_HI ], modH->u8Buffer[ ADD_LO ] );
-    uint8_t u8regsno = word( modH->u8Buffer[ NB_HI ], modH->u8Buffer[ NB_LO ] );
-    uint8_t u8CopyBufferSize;
-    uint16_t i;
-
-    modH->u8Buffer[ 2 ]       = u8regsno * 2;
-    modH->u8BufferSize         = 3;
-
-    for (i = u16StartAdd; i < u16StartAdd + u8regsno; i++)
-    {
-    	modH->u8Buffer[ modH->u8BufferSize ] = highByte(modH->u16regs[i]);
-    	modH->u8BufferSize++;
-    	modH->u8Buffer[ modH->u8BufferSize ] = lowByte(modH->u16regs[i]);
-    	modH->u8BufferSize++;
+    // Populate the response buffer with register values
+    for (uint16_t i = 0; i < registerCount; i++) {
+        uint16_t currentRegister = startAddress + i;
+        modH->u8Buffer[modH->u8BufferSize++] = highByte(modH->u16regs[currentRegister]);
+        modH->u8Buffer[modH->u8BufferSize++] = lowByte(modH->u16regs[currentRegister]);
     }
-    u8CopyBufferSize = modH->u8BufferSize +2;
+
+    // Calculate total response size including Modbus header
+    int8_t totalResponseSize = modH->u8BufferSize + 2;
+
+    // Send the outgoing message
     sendTxBuffer(modH);
 
-    return u8CopyBufferSize;
+    return totalResponseSize; // Return total size including Modbus header
 }
+int8_t process_FC5(modbusHandler_t *modH) {// Function to process function code 5 (Write Single Coil)
+    uint16_t coilAddress = word(modH->u8Buffer[ADD_HI], modH->u8Buffer[ADD_LO]);
+    uint16_t currentRegister = coilAddress / 16;
+    uint8_t currentBit = coilAddress % 16;
 
-/**
- * @brief
- * This method processes function 5
- * This method writes a value assigned by the master to a single bit
- *
- * @return u8BufferSize Response to master length
- * @ingroup discrete
- */
-int8_t process_FC5( modbusHandler_t *modH )
-{
-    uint8_t u8currentBit;
-    uint16_t u16currentRegister;
-    uint8_t u8CopyBufferSize;
-    uint16_t u16coil = word( modH->u8Buffer[ ADD_HI ], modH->u8Buffer[ ADD_LO ] );
+    // Determine the value to write to the coil (ON or OFF)
+    uint16_t coilValue = (modH->u8Buffer[NB_HI] == 0xFF) ? 1 : 0;
 
-    // point to the register and its bit
-    u16currentRegister = (u16coil / 16);
-    u8currentBit = (uint8_t) (u16coil % 16);
+    // Write to the specified coil
+    bitWrite(modH->u16regs[currentRegister], currentBit, coilValue);
 
-    // write to coil
-    bitWrite(
-    	modH->u16regs[ u16currentRegister ],
-        u8currentBit,
-		modH->u8Buffer[ NB_HI ] == 0xff );
-
-
-    // send answer to master
-    modH->u8BufferSize = 6;
-    u8CopyBufferSize =  modH->u8BufferSize +2;
+    // Prepare the response to send back to the master
+    modH->u8BufferSize = 6; // Modbus response size
     sendTxBuffer(modH);
 
-    return u8CopyBufferSize;
+    return modH->u8BufferSize + 2; // Return total size including Modbus header
 }
+int8_t process_FC6(modbusHandler_t *modH) {// Function to process function code 6 (Write Single word)
+    // Extract address and value from the received buffer
+    uint16_t u16add = word(modH->u8Buffer[ADD_HI], modH->u8Buffer[ADD_LO]);
+    uint16_t u16val = word(modH->u8Buffer[NB_HI], modH->u8Buffer[NB_LO]);
 
-/**
- * @brief
- * This method processes function 6
- * This method writes a value assigned by the master to a single word
- *
- * @return u8BufferSize Response to master length
- * @ingroup register
- */
-int8_t process_FC6(modbusHandler_t *modH )
-{
+    // Update the register with the new value
+    modH->u16regs[u16add] = u16val;
 
-    uint16_t u16add = word( modH->u8Buffer[ ADD_HI ], modH->u8Buffer[ ADD_LO ] );
-    uint8_t u8CopyBufferSize;
-    uint16_t u16val = word( modH->u8Buffer[ NB_HI ], modH->u8Buffer[ NB_LO ] );
-
-    modH->u16regs[ u16add ] = u16val;
-
-    // keep the same header
+    // Prepare response header
     modH->u8BufferSize = RESPONSE_SIZE;
 
-    u8CopyBufferSize = modH->u8BufferSize + 2;
+    // Send the response back
     sendTxBuffer(modH);
 
-    return u8CopyBufferSize;
+    // Return the size of the response buffer
+    return modH->u8BufferSize + 2; // Including CRC
 }
+int8_t process_FC15(modbusHandler_t *modH){// Function to process function code 15 (Write muliple Coil)
+    uint8_t currentBit, frameByte = 7, bitsCount = 0;
+    uint16_t startCoil, coilCount, currentRegister;
+    
+    // Get the start coil and the number of coils from the incoming message
+    startCoil = word(modH->u8Buffer[ADD_HI], modH->u8Buffer[ADD_LO]);
+    coilCount = word(modH->u8Buffer[NB_HI], modH->u8Buffer[NB_LO]);
 
-/**
- * @brief
- * This method processes function 15
- * This method writes a bit array assigned by the master
- *
- * @return u8BufferSize Response to master length
- * @ingroup discrete
- */
-int8_t process_FC15( modbusHandler_t *modH )
-{
-    uint8_t u8currentBit, u8frameByte, u8bitsno;
-    uint16_t u16currentRegister;
-    uint8_t u8CopyBufferSize;
-    uint16_t u16currentCoil, u16coil;
-    bool bTemp;
+    // Read each coil from the register map and update its value
+    for (uint16_t currentCoil = 0; currentCoil < coilCount; currentCoil++) {
+        uint16_t coilIndex = startCoil + currentCoil;
+        currentRegister = coilIndex / 16;
+        currentBit = (uint8_t)(coilIndex % 16);
 
-    // get the first and last coil from the message
-    uint16_t u16StartCoil = word( modH->u8Buffer[ ADD_HI ], modH->u8Buffer[ ADD_LO ] );
-    uint16_t u16Coilno = word( modH->u8Buffer[ NB_HI ], modH->u8Buffer[ NB_LO ] );
+        // Read the bit from the incoming message and write it to the register
+        bool bitValue = bitRead(modH->u8Buffer[frameByte], bitsCount);
+        bitWrite(modH->u16regs[currentRegister], currentBit, bitValue);
 
-
-    // read each coil from the register map and put its value inside the outcoming message
-    u8bitsno = 0;
-    u8frameByte = 7;
-    for (u16currentCoil = 0; u16currentCoil < u16Coilno; u16currentCoil++)
-    {
-
-        u16coil = u16StartCoil + u16currentCoil;
-        u16currentRegister = (u16coil / 16);
-        u8currentBit = (uint8_t) (u16coil % 16);
-
-        bTemp = bitRead(
-        			modH->u8Buffer[ u8frameByte ],
-                    u8bitsno );
-
-        bitWrite(
-            modH->u16regs[ u16currentRegister ],
-            u8currentBit,
-            bTemp );
-
-        u8bitsno ++;
-
-        if (u8bitsno > 7)
-        {
-            u8bitsno = 0;
-            u8frameByte++;
+        // Increment bit count and manage byte overflow
+        bitsCount++;
+        if (bitsCount > 7) {
+            bitsCount = 0;
+            frameByte++;
         }
     }
 
-    // send outcoming message
-    // it's just a copy of the incomping frame until 6th byte
-    modH->u8BufferSize         = 6;
-    u8CopyBufferSize = modH->u8BufferSize +2;
+    // Prepare the outgoing message (copying the first 6 bytes)
+    modH->u8BufferSize = 6;
+    uint8_t responseSize = modH->u8BufferSize + 2; // Include CRC
     sendTxBuffer(modH);
-    return u8CopyBufferSize;
+
+    return responseSize;
 }
+int8_t process_FC16(modbusHandler_t *modH) {// Function to process function code 16 (Write muliple words)
+    // Extract starting address and number of registers from the buffer
+    uint16_t startAddress = (modH->u8Buffer[ADD_HI] << 8) | modH->u8Buffer[ADD_LO];
+    uint16_t registerCount = (modH->u8Buffer[NB_HI] << 8) | modH->u8Buffer[NB_LO];
 
-/**
- * @brief
- * This method processes function 16
- * This method writes a word array assigned by the master
- *
- * @return u8BufferSize Response to master length
- * @ingroup register
- */
-int8_t process_FC16(modbusHandler_t *modH )
-{
-    uint16_t u16StartAdd = modH->u8Buffer[ ADD_HI ] << 8 | modH->u8Buffer[ ADD_LO ];
-    uint16_t u16regsno = modH->u8Buffer[ NB_HI ] << 8 | modH->u8Buffer[ NB_LO ];
-    uint8_t u8CopyBufferSize;
-    uint16_t i;
-    uint16_t temp;
+    // Set up response header
+    modH->u8Buffer[NB_HI] = 0;
+    modH->u8Buffer[NB_LO] = (uint8_t)registerCount; // Response size will not exceed 256 bytes
+    modH->u8BufferSize = RESPONSE_SIZE;
 
-    // build header
-    modH->u8Buffer[ NB_HI ]   = 0;
-    modH->u8Buffer[ NB_LO ]   = (uint8_t) u16regsno; // answer is always 256 or less bytes
-    modH->u8BufferSize         = RESPONSE_SIZE;
-
-    // write registers
-    for (i = 0; i < u16regsno; i++)
-    {
-        temp = word(
-        		modH->u8Buffer[ (BYTE_CNT + 1) + i * 2 ],
-				modH->u8Buffer[ (BYTE_CNT + 2) + i * 2 ]);
-
-        modH->u16regs[ u16StartAdd + i ] = temp;
+    // Write registers based on incoming data
+    for (uint16_t i = 0; i < registerCount; i++) {
+        uint16_t temp = word(
+            modH->u8Buffer[BYTE_CNT + 1 + i * 2],
+            modH->u8Buffer[BYTE_CNT + 2 + i * 2]
+        );
+        
+        modH->u16regs[startAddress + i] = temp;
     }
-    u8CopyBufferSize = modH->u8BufferSize +2;
+
+    // Prepare the size for the response buffer
+    int8_t responseSize = modH->u8BufferSize + 2; // Include CRC
     sendTxBuffer(modH);
 
-    return u8CopyBufferSize;
+    return responseSize;
 }
 
 
